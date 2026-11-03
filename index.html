@@ -76,6 +76,63 @@
     border-radius: 50%;
     box-shadow: 0 0 0 8px var(--panel), 0 0 0 10px var(--line), 0 30px 60px rgba(0,0,0,.45);
     will-change: transform;
+    cursor: pointer;
+    touch-action: manipulation;      /* no double-tap zoom */
+    -webkit-touch-callout: none;     /* no iOS long-press callout */
+    -webkit-user-select: none; user-select: none;
+  }
+  [hidden] { display: none !important; }
+
+  .wheel-hint { margin: -8px 0 0; color: var(--muted); font-size: .85rem; text-align: center; }
+  .wheel-hint .touch { display: none; }
+  @media (hover: none), (pointer: coarse) {
+    .wheel-hint .mouse { display: none; }
+    .wheel-hint .touch { display: inline; }
+  }
+
+  .slice-menu {
+    position: fixed; z-index: 20;
+    min-width: 200px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 6px;
+    box-shadow: 0 16px 40px rgba(0,0,0,.5);
+    display: flex; flex-direction: column;
+  }
+  .slice-menu .title {
+    padding: 6px 10px 8px;
+    font: 800 1rem var(--display);
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 4px;
+  }
+  .slice-menu button {
+    text-align: left;
+    background: transparent; color: var(--fg);
+    border: 0; border-radius: 8px;
+    padding: 10px; font: 500 .95rem var(--body);
+    cursor: pointer;
+  }
+  .slice-menu button:hover, .slice-menu button:focus-visible { background: var(--line); outline: none; }
+  .slice-menu button.danger { color: #ff8a73; }
+
+  .toast {
+    position: fixed; z-index: 30;
+    left: 50%; transform: translateX(-50%);
+    bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+    max-width: calc(100% - 32px);
+    display: flex; align-items: center; gap: 14px;
+    background: var(--fg); color: var(--bg);
+    border-radius: 12px;
+    padding: 10px 10px 10px 16px;
+    box-shadow: 0 12px 30px rgba(0,0,0,.45);
+    font-weight: 500;
+  }
+  .toast button {
+    border: 0; border-radius: 8px;
+    background: var(--bg); color: var(--accent);
+    font: 700 .9rem var(--body);
+    padding: 8px 12px; cursor: pointer;
   }
   .pointer {
     position: absolute;
@@ -198,6 +255,10 @@
       <canvas id="wheel" aria-label="Cuisine wheel" role="img"></canvas>
       <button class="hub" id="spin" type="button">SPIN</button>
     </div>
+    <p class="wheel-hint">
+      <span class="mouse">Double-click a slice to add another. Right-click for more.</span>
+      <span class="touch">Double-tap a slice to add another. Press and hold for more.</span>
+    </p>
 
     <div class="result" aria-live="polite">
       <span class="label" id="resultLabel">Tonight's pick</span>
@@ -231,6 +292,18 @@
   </aside>
 </main>
 
+<div class="slice-menu" id="sliceMenu" role="menu" hidden>
+  <div class="title" id="menuTitle"></div>
+  <button type="button" role="menuitem" data-act="dup">Add another slice</button>
+  <button type="button" role="menuitem" data-act="out">Sit out tonight</button>
+  <button type="button" role="menuitem" data-act="remove" class="danger">Remove this slice</button>
+</div>
+
+<div class="toast" id="toast" role="status" hidden>
+  <span class="msg"></span>
+  <button type="button">Undo</button>
+</div>
+
 <script>
 (() => {
   const DEFAULTS = ["Chipotle", "Señor Sisig", "Pupusas", "Chinese", "Japanese", "Thai",
@@ -238,7 +311,9 @@
   // Defaults that shipped before `seen` was tracked; anything in DEFAULTS
   // not yet seen gets added to an existing saved list on load.
   const FIRST_DEFAULTS = DEFAULTS.slice(0, 11);
-  const PALETTE = ["#ff6b4a", "#ffb238", "#3ec7a5", "#4f8bff", "#c46bff", "#ff5c9a", "#9bd14b", "#2fb7d6"];
+  // Ordered so neighbouring entries contrast; one colour per distinct name.
+  const PALETTE = ["#ff6b4a", "#ffb238", "#3ec7a5", "#4f8bff", "#c46bff", "#ff5c9a",
+    "#9bd14b", "#2fb7d6", "#f2e05a", "#a9a4ff", "#e8c99b", "#b6e3f4"];
   const KEY = "cuisine-wheel-v2";
 
   const store = {
@@ -271,10 +346,16 @@
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const active = () => state.items.filter(i => i.on);
-  const colorFor = (idx, n) => {
+  const key = name => name.trim().toLowerCase();
+  const sameAs = item => x => key(x.name) === key(item.name);
+  // Colour by name (order of first appearance in the full list), so copies of
+  // a slice match and colours don't shift when something sits out.
+  const colorOf = name => {
+    const names = [...new Set(state.items.map(i => key(i.name)))];
+    const idx = names.indexOf(key(name)), n = names.length;
     let c = idx % PALETTE.length;
-    // avoid the last slice matching the first
-    if (n > 1 && idx === n - 1 && c === 0) c = (c + 1) % PALETTE.length;
+    // keep the last name from wrapping onto the first name's colour
+    if (n > 1 && idx === n - 1 && c === 0) c = 1;
     return PALETTE[c];
   };
 
@@ -308,7 +389,7 @@
       ctx.moveTo(0, 0);
       ctx.arc(0, 0, r, a0, a0 + seg);
       ctx.closePath();
-      ctx.fillStyle = colorFor(i, n);
+      ctx.fillStyle = colorOf(items[i].name);
       ctx.fill();
       ctx.strokeStyle = "rgba(20,22,31,.35)";
       ctx.lineWidth = Math.max(1, r * 0.006);
@@ -413,15 +494,20 @@
       li.className = "chip" + (item.on ? "" : " off");
       const dot = document.createElement("span");
       dot.className = "dot";
-      const pos = on.indexOf(item);
-      dot.style.background = pos >= 0 ? colorFor(pos, on.length) : "#555a74";
+      dot.style.background = item.on ? colorOf(item.name) : "#555a74";
       const name = document.createElement("span");
       name.className = "name";
       name.textContent = item.name;
       name.title = item.on ? "Sit this one out" : "Put back on the wheel";
       name.tabIndex = 0;
       name.setAttribute("role", "button");
-      const toggle = () => { if (spinning) return; item.on = !item.on; persist(); renderList(); draw(); };
+      // sitting out (or bringing back) applies to every copy of this name
+      const toggle = () => {
+        if (spinning) return;
+        const on = !item.on;
+        state.items.filter(sameAs(item)).forEach(x => (x.on = on));
+        persist(); renderList(); draw();
+      };
       name.addEventListener("click", toggle);
       name.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
       const del = document.createElement("button");
@@ -469,6 +555,139 @@
   optSound.checked = state.sound;
   optRemove.addEventListener("change", () => { state.removeWinner = optRemove.checked; persist(); });
   optSound.addEventListener("change", () => { state.sound = optSound.checked; persist(); });
+
+  // ---- slice gestures ----
+  // Mouse: double-click duplicates, right-click opens the menu.
+  // Touch: double-tap duplicates, press-and-hold opens the menu.
+  const wrap = canvas.parentElement;
+  const sliceMenu = $("sliceMenu"), toastEl = $("toast");
+  let menuItem = null;
+  let lastPointerType = "mouse", lastTap = null, pressTimer = null, pressStart = null, pressFired = false;
+  const refresh = () => { persist(); renderList(); draw(); };
+
+  // Which slice is under a screen point, accounting for the wheel's rotation.
+  function sliceAt(x, y) {
+    const items = active();
+    if (!items.length) return null;
+    const b = wrap.getBoundingClientRect();
+    const dx = x - (b.left + b.width / 2), dy = y - (b.top + b.height / 2);
+    const dist = Math.hypot(dx, dy), r = b.width / 2;
+    if (dist > r || dist < r * 0.13) return null;           // outside the wheel or on the hub
+    const screenAngle = (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
+    const wheelAngle = (((screenAngle - rotation) % 360) + 360) % 360;
+    return items[Math.floor(wheelAngle / (360 / items.length))] || null;
+  }
+
+  function duplicate(item) {
+    const i = state.items.indexOf(item);
+    if (i < 0) return;
+    const copy = { name: item.name, on: true };
+    state.items.splice(i + 1, 0, copy);
+    refresh();
+    const n = active().filter(sameAs(item)).length;
+    toast(`${item.name} now has ${n} slices`, () => {
+      const j = state.items.indexOf(copy);
+      if (j >= 0) { state.items.splice(j, 1); refresh(); }
+    });
+  }
+  function removeItem(item) {
+    const i = state.items.indexOf(item);
+    if (i < 0) return;
+    state.items.splice(i, 1);
+    refresh();
+    toast(`Removed ${item.name}`, () => {
+      state.items.splice(Math.min(i, state.items.length), 0, item); refresh();
+    });
+  }
+  function sitOut(item) {
+    const all = state.items.filter(x => x.on && sameAs(item)(x));
+    all.forEach(x => (x.on = false));
+    refresh();
+    const what = all.length > 1 ? `All ${all.length} ${item.name} slices are` : `${item.name} is`;
+    toast(`${what} sitting out`, () => { all.forEach(x => (x.on = true)); refresh(); });
+  }
+
+  let toastTimer;
+  const hideToast = () => { toastEl.hidden = true; };
+  function toast(msg, undo) {
+    toastEl.querySelector(".msg").textContent = msg;
+    const btn = toastEl.querySelector("button");
+    btn.hidden = !undo;
+    btn.onclick = () => { if (!spinning) undo(); hideToast(); };
+    toastEl.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(hideToast, 5000);
+  }
+
+  function openMenu(item, x, y) {
+    menuItem = item;
+    $("menuTitle").textContent = item.name;
+    const copies = active().filter(sameAs(item)).length;
+    sliceMenu.querySelector('[data-act="out"]').textContent =
+      copies > 1 ? `Sit out tonight (all ${copies} slices)` : "Sit out tonight";
+    sliceMenu.hidden = false;
+    const w = sliceMenu.offsetWidth, h = sliceMenu.offsetHeight;
+    sliceMenu.style.left = Math.max(8, Math.min(x, innerWidth - w - 8)) + "px";
+    sliceMenu.style.top = Math.max(8, Math.min(y, innerHeight - h - 8)) + "px";
+    sliceMenu.querySelector("button").focus({ preventScroll: true });
+  }
+  function closeMenu() { sliceMenu.hidden = true; menuItem = null; }
+
+  sliceMenu.addEventListener("click", e => {
+    const act = e.target.closest("button")?.dataset.act;
+    if (!act || !menuItem || spinning) return;
+    const item = menuItem;
+    closeMenu();
+    if (act === "dup") duplicate(item);
+    else if (act === "out") sitOut(item);
+    else if (act === "remove") removeItem(item);
+  });
+  document.addEventListener("pointerdown", e => {
+    if (!sliceMenu.hidden && !sliceMenu.contains(e.target)) closeMenu();
+  });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
+  window.addEventListener("scroll", closeMenu, { passive: true });
+  window.addEventListener("resize", closeMenu);
+
+  canvas.addEventListener("contextmenu", e => {
+    e.preventDefault();
+    if (spinning) return;
+    const item = sliceAt(e.clientX, e.clientY);
+    if (item) openMenu(item, e.clientX, e.clientY);
+  });
+  canvas.addEventListener("dblclick", e => {
+    if (spinning || lastPointerType === "touch") return;   // touch handled below
+    const item = sliceAt(e.clientX, e.clientY);
+    if (item) duplicate(item);
+  });
+
+  canvas.addEventListener("pointerdown", e => {
+    lastPointerType = e.pointerType;
+    if (e.pointerType !== "touch" || spinning) return;
+    pressStart = { x: e.clientX, y: e.clientY };
+    pressFired = false;
+    clearTimeout(pressTimer);
+    pressTimer = setTimeout(() => {
+      const item = sliceAt(pressStart.x, pressStart.y);
+      if (item) { pressFired = true; lastTap = null; openMenu(item, pressStart.x, pressStart.y); }
+    }, 500);
+  });
+  canvas.addEventListener("pointermove", e => {
+    if (pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > 10) clearTimeout(pressTimer);
+  });
+  canvas.addEventListener("pointercancel", () => clearTimeout(pressTimer));
+  canvas.addEventListener("pointerup", e => {
+    clearTimeout(pressTimer);
+    if (e.pointerType !== "touch" || spinning || pressFired) return;
+    const item = sliceAt(e.clientX, e.clientY);
+    const now = performance.now();
+    if (item && lastTap && lastTap.item === item && now - lastTap.t < 350) {
+      lastTap = null;          // consume both taps: exactly one slice per double-tap
+      duplicate(item);
+    } else {
+      lastTap = { t: now, item };
+    }
+  });
 
   spinBtn.addEventListener("click", spin);
   document.addEventListener("keydown", e => {
