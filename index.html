@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Cuisine Wheel</title>
 <link rel="icon" href="icons/favicon.svg?v=2" type="image/svg+xml">
 <link rel="icon" href="icons/favicon-32.png?v=2" sizes="32x32" type="image/png">
@@ -30,6 +30,12 @@
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; }
+  html {
+    touch-action: pan-x pan-y;          /* scroll only: no pinch or double-tap zoom */
+    -webkit-text-size-adjust: 100%;     /* no iOS text inflation on rotate */
+    text-size-adjust: 100%;
+  }
+  html, body { overflow-x: hidden; }    /* nothing can push the page sideways */
   body {
     background: radial-gradient(ellipse at 30% 0%, #23263a 0%, var(--bg) 60%) fixed, var(--bg);
     color: var(--fg);
@@ -616,7 +622,7 @@
     btn.onclick = () => { if (!spinning) undo(); hideToast(); };
     toastEl.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(hideToast, 5000);
+    toastTimer = setTimeout(hideToast, 3000);
   }
 
   function openMenu(item, x, y) {
@@ -688,6 +694,10 @@
       lastTap = { t: now, item };
     }
   });
+
+  // iOS Safari ignores user-scalable=no, so block its pinch gesture directly.
+  ["gesturestart", "gesturechange", "gestureend"].forEach(t =>
+    document.addEventListener(t, e => e.preventDefault(), { passive: false }));
 
   spinBtn.addEventListener("click", spin);
   document.addEventListener("keydown", e => {
