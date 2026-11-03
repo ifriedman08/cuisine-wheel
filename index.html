@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Cuisine Wheel</title>
-<link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
-<link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/favicon.svg?v=2" type="image/svg+xml">
+<link rel="icon" href="icons/favicon-32.png?v=2" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png?v=2">
+<link rel="manifest" href="manifest.webmanifest?v=2">
 <meta name="theme-color" content="#14161f">
 <meta name="apple-mobile-web-app-title" content="Cuisine Wheel">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -234,7 +234,10 @@
 <script>
 (() => {
   const DEFAULTS = ["Chipotle", "Señor Sisig", "Pupusas", "Chinese", "Japanese", "Thai",
-    "Burmese", "Indian", "Pizza", "Burgers", "Mediterranean"];
+    "Burmese", "Indian", "Pizza", "Burgers", "Mediterranean", "Ok's Deli"];
+  // Defaults that shipped before `seen` was tracked; anything in DEFAULTS
+  // not yet seen gets added to an existing saved list on load.
+  const FIRST_DEFAULTS = DEFAULTS.slice(0, 11);
   const PALETTE = ["#ff6b4a", "#ffb238", "#3ec7a5", "#4f8bff", "#c46bff", "#ff5c9a", "#9bd14b", "#2fb7d6"];
   const KEY = "cuisine-wheel-v2";
 
@@ -248,7 +251,15 @@
     items: saved?.items?.length ? saved.items : DEFAULTS.map(name => ({ name, on: true })),
     removeWinner: !!saved?.removeWinner,
     sound: saved?.sound ?? true,
+    seen: DEFAULTS.slice(),
   };
+  if (saved?.items?.length) {
+    // add newly introduced defaults without reviving ones the user removed
+    const seen = saved.seen || FIRST_DEFAULTS;
+    const have = new Set(state.items.map(i => i.name.toLowerCase()));
+    DEFAULTS.filter(d => !seen.includes(d) && !have.has(d.toLowerCase()))
+      .forEach(name => state.items.push({ name, on: true }));
+  }
   const persist = () => store.save(state);
 
   const $ = id => document.getElementById(id);
